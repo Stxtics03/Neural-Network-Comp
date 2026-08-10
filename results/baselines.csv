@@ -1,0 +1,7 @@
+method,setting,accuracy,size_kb,compression_ratio
+baseline,none,0.9904,241.04,1.0
+magnitude_pruning,sparsity=0.3,0.9906,252.92,0.95
+magnitude_pruning,sparsity=0.5,0.9902,180.9,1.33
+magnitude_pruning,sparsity=0.7,0.983,108.88,2.21
+magnitude_pruning,sparsity=0.9,0.6366,36.87,6.54
+int8_quantization,per-tensor symmetric,0.9905,60.97,3.95
