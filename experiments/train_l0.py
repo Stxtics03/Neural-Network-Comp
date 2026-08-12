@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import math
 import sys
 from pathlib import Path
 
@@ -46,13 +47,25 @@ CKPT_PATH = Path("./results/checkpoints/lenet5_best.pt")
 EXCLUDE_LAYERS = ["fc3"]  # never gate the classification head -- see l0_wrapper.py
 
 
-def compressed_size_bytes_l0(sparsity_report: dict) -> int:
+def compressed_size_bytes_l0(sparsity_report: dict, bits_per_weight: int = 32,
+                              scale_bytes_per_layer: int = 0) -> int:
     """LeNet-5-specific cascading size accounting: each gated layer's
     surviving-unit count shrinks both its own weight matrix AND the
     next layer's input dimension. Assumes the exact architecture in
     models/lenet5.py (padding=2 on conv1, two 2x2 max-pools -> 5x5
-    spatial map feeding fc1)."""
+    spatial map feeding fc1).
+
+    bits_per_weight defaults to 32 (fp32). Pass 8 (or 4, 2...) with
+    scale_bytes_per_layer=4 to price the same structure stored at that
+    bit width with a per-tensor scale -- see l0_int8_combined.py and
+    aggressive_stack.py. Sub-byte widths are packed, so a layer's weight
+    block is ceil(n_weights * bits / 8) bytes rather than one byte per
+    weight. Biases stay fp32 throughout, matching the quantization
+    baseline."""
     surviving = {name: info["num_surviving"] for name, info in sparsity_report.items()}
+
+    def wbytes(n_weights: int) -> int:
+        return math.ceil(n_weights * bits_per_weight / 8)
 
     out1 = surviving.get("conv1", 6)
     out2 = surviving.get("conv2", 16)
@@ -60,11 +73,12 @@ def compressed_size_bytes_l0(sparsity_report: dict) -> int:
     out_fc2 = surviving.get("fc2", 84)
 
     total = 0
-    total += out1 * 1 * 5 * 5 * 4 + out1 * 4                # conv1: in_channels=1 fixed
-    total += out2 * out1 * 5 * 5 * 4 + out2 * 4              # conv2: in = surviving conv1 channels
-    total += out_fc1 * (out2 * 5 * 5) * 4 + out_fc1 * 4      # fc1: in = surviving conv2 channels * 5x5
-    total += out_fc2 * out_fc1 * 4 + out_fc2 * 4             # fc2: in = surviving fc1 units
-    total += 10 * out_fc2 * 4 + 10 * 4                       # fc3: in = surviving fc2 units, out=10 fixed
+    total += wbytes(out1 * 1 * 5 * 5) + out1 * 4              # conv1: in_channels=1 fixed
+    total += wbytes(out2 * out1 * 5 * 5) + out2 * 4           # conv2: in = surviving conv1 channels
+    total += wbytes(out_fc1 * (out2 * 5 * 5)) + out_fc1 * 4   # fc1: in = surviving conv2 channels * 5x5
+    total += wbytes(out_fc2 * out_fc1) + out_fc2 * 4          # fc2: in = surviving fc1 units
+    total += wbytes(10 * out_fc2) + 10 * 4                    # fc3: in = surviving fc2 units, out=10 fixed
+    total += 5 * scale_bytes_per_layer                        # one fp32 scale per layer, if quantized
     return total
 
 
@@ -75,7 +89,8 @@ def load_baseline_state(device):
 
 
 def train_one_lambda(lam: float, baseline_state, train_loader, test_loader, device,
-                      epochs: int, base_lr: float, gate_lr_mult: float):
+                      epochs: int, base_lr: float, gate_lr_mult: float,
+                      return_model: bool = False):
     base = build_model().to(device)
     base.load_state_dict(copy.deepcopy(baseline_state))
     model = L0GatedModel(base, exclude_layer_names=EXCLUDE_LAYERS).to(device)
@@ -100,6 +115,8 @@ def train_one_lambda(lam: float, baseline_state, train_loader, test_loader, devi
     model.eval()
     acc = evaluate_accuracy(model, test_loader, device)
     report = model.sparsity_report()
+    if return_model:
+        return acc, report, model
     return acc, report
 
 

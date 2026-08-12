@@ -22,16 +22,31 @@ import torch
 import torch.nn as nn
 
 
-def _quantize_dequantize_tensor(w: torch.Tensor) -> torch.Tensor:
-    """Symmetric per-tensor INT8: map [-max|w|, +max|w|] -> [-127, 127],
-    round to nearest integer, then map back to float. The rounding is
-    where information is lost -- that loss is what we're measuring."""
+def _quantize_dequantize_tensor(w: torch.Tensor, bits: int = 8) -> torch.Tensor:
+    """Symmetric per-tensor: map [-max|w|, +max|w|] -> [-qmax, +qmax] where
+    qmax = 2^(bits-1) - 1, round to nearest integer, then map back to
+    float. The rounding is where information is lost -- that loss is what
+    we're measuring. bits=8 gives the standard INT8 scheme (qmax=127);
+    lower bit widths coarsen the grid fast (INT4 has only 7 positive
+    levels, INT2 has 1)."""
+    if bits < 2:
+        raise ValueError(f"bits must be >= 2, got {bits}")
+    qmax = 2 ** (bits - 1) - 1
     max_abs = w.abs().max()
     if max_abs == 0:
         return w.clone()
-    scale = max_abs / 127.0
-    q = torch.clamp(torch.round(w / scale), -127, 127)
+    scale = max_abs / qmax
+    q = torch.clamp(torch.round(w / scale), -qmax, qmax)
     return q * scale
+
+
+def quantize_model(model: nn.Module, bits: int = 8) -> nn.Module:
+    """Bit-width-generic version of quantize_model_int8."""
+    quantized = copy.deepcopy(model)
+    for m in quantized.modules():
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            m.weight.data = _quantize_dequantize_tensor(m.weight.data, bits=bits)
+    return quantized
 
 
 def quantize_model_int8(model: nn.Module) -> nn.Module:
