@@ -21,7 +21,6 @@ useful part.
 | Inference speedup from 10.4x fewer params | **none** (1.01x / 0.90x) | measured on materialized model |
 | Deterministic annealing's edge over k-means | **none** under matched compute | paired t-test, n=5 |
 
-### Résumé-accurate phrasings
 
 Wording that the data here actually supports:
 
