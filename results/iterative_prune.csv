@@ -1,0 +1,6 @@
+target_sparsity,actual_sparsity,acc_before_finetune,acc_after_finetune,error_pct_after,size_kb,compression_ratio
+0.5,0.5,0.9902,0.9921,0.79,180.9,1.33
+0.7,0.7,0.982,0.9918,0.82,108.88,2.21
+0.8,0.8,0.9827,0.9919,0.81,72.87,3.31
+0.9,0.9,0.7538,0.9899,1.01,36.86,6.54
+0.95,0.95,0.6732,0.9859,1.41,18.87,12.77
