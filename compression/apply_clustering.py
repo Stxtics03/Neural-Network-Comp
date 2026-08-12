@@ -30,25 +30,35 @@ def _cluster_layer(module: nn.Module, clusterer) -> tuple[torch.Tensor, list[int
 
 
 def apply_clustering(
-    model: nn.Module, k: int, method: str = "da", seed: int = 0, **method_kwargs,
+    model: nn.Module, k: int, method: str = "da", seed: int = 0,
+    per_layer_kwargs: dict[str, dict] | None = None, **method_kwargs,
 ) -> tuple[nn.Module, dict]:
     """
     method: "da" (deterministic annealing), "kmeans++" or "kmeans_random".
+
+    per_layer_kwargs optionally overrides method_kwargs for individual
+    layers, keyed by layer name. Needed for compute-parity comparisons:
+    a fair kmeans restart budget is per-layer, because DA's cost per
+    layer and kmeans' cost per layer scale differently (see
+    experiments/compute_parity_check.py).
+
     Returns (new_model, info) where info maps layer_name -> (labels, num_clusters, unit_dim).
     """
     clustered = copy.deepcopy(model)
     info = {}
+    per_layer_kwargs = per_layer_kwargs or {}
 
     for name, module in clustered.named_modules():
         if not isinstance(module, (nn.Conv2d, nn.Linear)):
             continue
 
+        kwargs = {**method_kwargs, **per_layer_kwargs.get(name, {})}
         if method == "da":
-            clusterer = DeterministicAnnealingClusterer(k=k, seed=seed, **method_kwargs)
+            clusterer = DeterministicAnnealingClusterer(k=k, seed=seed, **kwargs)
         elif method == "kmeans++":
-            clusterer = KMeansClusterer(k=k, init="kmeans++", seed=seed, **method_kwargs)
+            clusterer = KMeansClusterer(k=k, init="kmeans++", seed=seed, **kwargs)
         elif method == "kmeans_random":
-            clusterer = KMeansClusterer(k=k, init="random", seed=seed, **method_kwargs)
+            clusterer = KMeansClusterer(k=k, init="random", seed=seed, **kwargs)
         else:
             raise ValueError(f"unknown method {method}")
 
