@@ -1,0 +1,19 @@
+seed,method,setting,accuracy,compression_ratio
+0,baseline,none,0.9904,1.0
+0,magnitude_pruning,sparsity=0.3,0.9906,0.95
+0,magnitude_pruning,sparsity=0.5,0.9902,1.33
+0,magnitude_pruning,sparsity=0.7,0.983,2.21
+0,magnitude_pruning,sparsity=0.9,0.6366,6.54
+0,int8_quantization,per-tensor symmetric,0.9905,3.95
+1,baseline,none,0.9908,1.0
+1,magnitude_pruning,sparsity=0.3,0.9906,0.95
+1,magnitude_pruning,sparsity=0.5,0.9891,1.33
+1,magnitude_pruning,sparsity=0.7,0.9851,2.21
+1,magnitude_pruning,sparsity=0.9,0.7095,6.54
+1,int8_quantization,per-tensor symmetric,0.9908,3.95
+2,baseline,none,0.9909,1.0
+2,magnitude_pruning,sparsity=0.3,0.991,0.95
+2,magnitude_pruning,sparsity=0.5,0.9914,1.33
+2,magnitude_pruning,sparsity=0.7,0.9827,2.21
+2,magnitude_pruning,sparsity=0.9,0.7405,6.54
+2,int8_quantization,per-tensor symmetric,0.9907,3.95

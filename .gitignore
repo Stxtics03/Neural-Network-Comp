@@ -3,3 +3,4 @@ data_cache/
 __pycache__/
 *.pyc
 results/checkpoints/*.pt
+results/checkpoints/**/*.pt

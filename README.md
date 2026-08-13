@@ -20,6 +20,7 @@ useful part.
 | Highest sparsity at ~1% error | **95%** weights zero, 1.03% error | iterative prune + fine-tune, 3 seeds |
 | Inference speedup from 10.4x fewer params | **none** (1.01x / 0.90x) | measured on materialized model |
 | Deterministic annealing's edge over k-means | **none** under matched compute | paired t-test, n=5 |
+| Depth of the 90%-sparsity accuracy cliff | **unstable**, 69.55% +/- 4.36pp | 3 freshly trained baselines |
 
 
 Wording that the data here actually supports:
@@ -70,16 +71,23 @@ most often assumed to support:
 
 Baseline: **99.04%** test accuracy, 241.0 KB dense fp32.
 
-### Pruning and quantization, single-shot (single seed)
+### Pruning and quantization, single-shot (3 seeds)
 
 | Method | Setting | Accuracy | Size | Compression |
 |---|---|---|---|---|
-| Baseline | — | 99.04% | 241.0 KB | 1.00x |
-| Magnitude pruning | 30% sparsity | 99.06% | 252.9 KB | **0.95x** |
-| Magnitude pruning | 50% sparsity | 99.02% | 180.9 KB | 1.33x |
-| Magnitude pruning | 70% sparsity | 98.30% | 108.9 KB | 2.21x |
-| Magnitude pruning | 90% sparsity | 63.66% | 36.9 KB | 6.54x |
-| INT8 quantization | per-tensor symmetric | 99.05% | 61.0 KB | 3.95x |
+| Baseline | — | 99.07% +/- 0.02 | 241.0 KB | 1.00x |
+| Magnitude pruning | 30% sparsity | 99.07% +/- 0.02 | 252.9 KB | **0.95x** |
+| Magnitude pruning | 50% sparsity | 99.02% +/- 0.09 | 180.9 KB | 1.33x |
+| Magnitude pruning | 70% sparsity | 98.36% +/- 0.11 | 108.9 KB | 2.21x |
+| Magnitude pruning | 90% sparsity | **69.55% +/- 4.36** | 36.9 KB | 6.54x |
+| INT8 quantization | per-tensor symmetric | 99.07% +/- 0.01 | 61.0 KB | 3.95x |
+
+The seed here is the *trained model*, not the compression method — magnitude
+pruning and per-tensor INT8 are both deterministic given a fixed
+checkpoint, so each seed required training a fresh baseline. Every other
+experiment in this project is built on the seed-0 checkpoint, which
+scored 99.04%; accuracy losses quoted elsewhere are relative to that
+number, not to the 99.07% mean above.
 
 ### Iterative pruning WITH fine-tuning (3 seeds)
 
@@ -135,9 +143,9 @@ the structural cliff before any quantization is applied.
 
 | Config | PTQ accuracy | QAT accuracy | Recovered | Compression | Verdict |
 |---|---|---|---|---|---|
-| lambda=0.02, INT4 | 98.22% (-0.81pp) | **98.93% (-0.11pp)** | +0.71pp | **81.51x** | pass |
-| lambda=0.05, INT4 | 97.70% (-1.34pp) | **98.49% (-0.54pp)** | +0.80pp | **147.82x** | pass |
-| lambda=0.05, INT3 | 91.66% (-7.38pp) | 97.77% (-1.27pp) | **+6.11pp** | 189.83x | fail by 0.27pp |
+| lambda=0.02, INT4 (n=2) | 98.22% (-0.81pp) | **98.93% (-0.11pp)** | +0.71pp | **81.51x** | pass |
+| lambda=0.05, INT4 (n=2) | 97.70% (-1.34pp) | **98.49% (-0.54pp)** | +0.80pp | **147.82x** | pass |
+| lambda=0.05, INT3 (n=4) | 91.35% (-7.69pp) | 97.93% (-1.11pp) | **+6.58pp** | 184.58x | fail by 0.11pp |
 
 The lambda=0.02 ratio is 81.51x rather than the 79.55x its PTQ counterpart
 scored because INT4 rounding deleted whole units during fine-tuning,
@@ -165,8 +173,21 @@ fp32 weight, so a naive sparse format only wins past `4/6 ~= 33%`
 sparsity. Reporting sparsity percentages without converting to a storage
 format hides this entirely.
 
+**The pruning cliff is real, but its depth is close to arbitrary.**
+Accuracy is essentially flat from 0% to 70% sparsity (99.07% -> 98.36%,
+0.71pp for more than 2x compression), then collapses by 90%. How far it
+collapses is the unstable part: 69.55% **+/- 4.36pp** across 3 seeds,
+against spreads of 0.01-0.11pp for every other row in that table. Once
+pruning pushes a network past its cliff, a single-seed measurement of
+where it lands carries almost no information — the figure this project
+originally reported, 63.66%, was one pessimistic draw.
+
+**INT8 is the most stable measurement here** (+/-0.01pp across seeds).
+That's a quiet argument for it as a default: not merely cheap in
+accuracy, but predictable in a way heavy pruning is not.
+
 **Fine-tuning is doing most of the work at high sparsity, and it should
-be labeled as such.** Single-shot pruning collapses to 63.66% at 90%
+be labeled as such.** Single-shot pruning collapses to 69.55% at 90%
 sparsity; with retraining between steps the same sparsity reaches 99.08%.
 Averaged over 3 seeds the rescue is +25.40pp at 90% and +23.16pp at 95%,
 and it is what the extra training bought, not what pruning achieved.
@@ -200,26 +221,35 @@ INT4 at lambda=0.05 costs 1.34pp — enough to miss a 1pp budget at
 recovers +0.80pp, landing at 0.54pp. The weights adapt to the grid they
 will be stored on rather than being rounded onto it blind.
 
-**INT3's failure is a rounding problem, not a representational one.**
-Under post-training quantization INT3 looks hopeless — 4.20pp at
-lambda=0.02, 7.38pp at lambda=0.05 — which reads like a hard floor
-between INT4 (7 levels per sign) and INT3 (3 levels). It isn't. QAT
-recovers **+6.11pp** of that 7.38pp gap, landing INT3 at 1.27pp and
-189.83x, missing a 1pp budget by 0.27pp. Three levels per sign *can*
-encode this network; the weights just have to be trained knowing it.
-INT2 (1 level) is genuinely dead at ~10% accuracy, so the real floor is
-one bit lower than PTQ suggests.
+**INT3's failure is a rounding problem, not a representational one — and
+it sits exactly on the budget line.** Under post-training quantization
+INT3 looks hopeless (4.20pp at lambda=0.02, 7.69pp at lambda=0.05),
+which reads like a hard floor between INT4 (7 levels per sign) and INT3
+(3 levels). It isn't. QAT recovers **+6.58pp** of that 7.69pp gap,
+landing INT3 at 1.11pp and 184.58x. Three levels per sign *can* encode
+this network; the weights have to be trained knowing it.
 
-**QAT collapses seed variance at INT4 — and inflates it at INT3.** At
-INT4 the two seeds' spread falls from 0.81pp to 0.02pp (lambda=0.02) and
-0.14pp to 0.03pp (lambda=0.05): rounding a finished model onto a coarse
-grid depends on exactly where its weights happened to land, and training
-into the grid removes that dependence. At INT3 the pattern reverses,
-0.26pp before to 0.76pp after. The plausible reading is that INT3 sits at
-the edge of what the network can represent, so the outcome depends on
-which solution the fine-tuning trajectory happens to find rather than on
-the rounding — which is also a reason to treat the INT3 number as the
-least trustworthy in this table, at n=2.
+The verdict is a fail, but only just, and the honest description is
+"straddles the bar" rather than "below it": across 4 seeds the QAT
+accuracies were 97.39, 97.89, 98.15 and 98.31%, so **2 of 4 individually
+clear the 98.04% pass mark** while the mean does not. Reporting either
+"INT3 achieves 184x within 1pp" or "INT3 fails" alone would misrepresent
+it. INT2 (1 level) is genuinely dead at ~10%, so the real floor is one
+bit below where PTQ places it.
+
+**QAT collapses seed variance, and most where PTQ is least stable.**
+Seed-to-seed spread before and after QAT: 0.81pp -> 0.02pp
+(lambda=0.02/INT4), 0.14pp -> 0.03pp (lambda=0.05/INT4), and **9.38pp ->
+0.92pp** (lambda=0.05/INT3, n=4). Rounding a finished model onto a coarse
+grid depends on exactly where its weights happened to land — at INT3 that
+lottery swings accuracy across a 9-point range — and training into the
+grid removes the dependence almost entirely.
+
+This finding was wrong at n=2. Two seeds put INT3's PTQ spread at 0.26pp
+and its QAT spread at 0.76pp, which read as QAT *inflating* variance;
+that inverted the real pattern purely because those two PTQ runs happened
+to land near each other. It is recorded here because it is a clean
+example of how a two-seed spread estimate can invert a conclusion.
 
 **Coarse quantization can delete whole units by itself.** During INT4
 QAT, a surviving unit whose weights are all small relative to its
@@ -295,10 +325,9 @@ Numbers that could silently drift are pinned by checks that fail loudly:
 
 ## Scope and limitations
 
-- **Seed counts are low**: 5 for L0 and clustering, 3 for L0+INT8 and
-  iterative pruning, 2 for the stack sweeps and QAT. Non-significant
-  results mean "not detectable at this n", not "no effect". The INT3 QAT
-  number is the shakiest, at n=2 with a 0.76pp spread between seeds.
+- **Seed counts are low**: 5 for L0 and clustering, 3 for the baselines,
+  L0+INT8 and iterative pruning, 2 for the stack sweeps. Non-significant
+  results mean "not detectable at this n", not "no effect".
 - **Quantization is simulated**, not real integer inference.
 - **L0 size accounting is architecture-specific** — the cascade in
   `compressed_size_bytes_l0` hardcodes this LeNet-5 (padding=2 conv1,
@@ -338,6 +367,7 @@ python experiments/l0_seed_verify.py --lambdas 0.005 0.01 0.02 --n-seeds 5
 python experiments/l0_int8_combined.py --lambdas 0.005 0.01 0.02 --n-seeds 3
 python experiments/aggressive_stack.py --lambdas 0.02 0.05 0.1 --bits 32 8 4 3 2
 python experiments/qat_stack.py --configs 0.05:4 0.02:4 --n-seeds 2
+python experiments/baseline_seed_verify.py --extra-seeds 1 2   # trains fresh baselines
 python experiments/iterative_prune.py --schedule 0.5 0.7 0.8 0.9 0.93 0.95 --epochs-per-step 4
 python experiments/materialize_pruned.py --lam 0.02        # real narrow model + latency
 ```
@@ -359,12 +389,12 @@ results/        Output CSVs and checkpoints (checkpoints gitignored)
 
 ## Next steps
 
-- **Per-channel quantization scales.** Would likely push INT3 from
-  unusable toward usable, and would stop coarse quantization from
-  deleting whole units.
-- **Multi-seed the INT3 QAT result**, currently n=2 with a 0.76pp spread
-  — the weakest evidence behind any number here, and the one closest to
-  changing a verdict (it misses the 1pp bar by 0.27pp).
+- **Per-channel quantization scales, to resolve INT3.** At n=4 INT3 sits
+  on the budget line — 1.11pp mean, 2 of 4 seeds individually passing —
+  so it is the one open verdict in the project. Per-channel scales would
+  probably move it decisively to the passing side, and would also stop
+  coarse rounding from deleting whole units, which currently happens at
+  INT4 as well.
 - **Combine unstructured pruning with the L0+QAT stack.** They are
   currently separate branches; 95% weight sparsity inside an already
   structurally-pruned INT4 model is untested.

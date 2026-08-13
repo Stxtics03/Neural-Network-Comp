@@ -35,29 +35,28 @@ def evaluate(model, loader, device) -> float:
     return correct / total
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--ckpt-dir", default="./results/checkpoints")
-    args = parser.parse_args()
+def train_baseline(seed: int, epochs: int, batch_size: int, lr: float,
+                    ckpt_dir: Path, device, quiet: bool = False):
+    """Trains one LeNet-5 from scratch and saves the best-by-test-accuracy
+    checkpoint into ckpt_dir. Returns (best_accuracy, checkpoint_path).
 
-    torch.manual_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[train_baseline] device={device}")
-
-    train_loader, test_loader = get_loaders(batch_size=args.batch_size)
+    Factored out so baseline_seed_verify.py can train additional seeds
+    through the exact same procedure rather than reimplementing it. Note
+    that ckpt_dir must differ per seed -- the filename is fixed, so
+    sharing a directory silently overwrites the previous seed's model.
+    """
+    torch.manual_seed(seed)
+    train_loader, test_loader = get_loaders(batch_size=batch_size)
     model = build_model().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
-    ckpt_dir = Path(args.ckpt_dir)
+    ckpt_dir = Path(ckpt_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = ckpt_dir / "lenet5_best.pt"
     best_acc = 0.0
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         for x, y in train_loader:
@@ -70,15 +69,34 @@ def main():
 
         train_loss = running_loss / len(train_loader.dataset)
         test_acc = evaluate(model, test_loader, device)
-        print(f"[train_baseline] epoch {epoch:2d}/{args.epochs}  "
-              f"train_loss={train_loss:.4f}  test_acc={test_acc:.4f}")
+        if not quiet:
+            print(f"[train_baseline] epoch {epoch:2d}/{epochs}  "
+                  f"train_loss={train_loss:.4f}  test_acc={test_acc:.4f}")
 
         if test_acc > best_acc:
             best_acc = test_acc
-            torch.save(model.state_dict(), ckpt_dir / "lenet5_best.pt")
+            torch.save(model.state_dict(), ckpt_path)
 
+    return best_acc, ckpt_path
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--ckpt-dir", default="./results/checkpoints")
+    args = parser.parse_args()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[train_baseline] device={device}")
+
+    best_acc, ckpt_path = train_baseline(
+        args.seed, args.epochs, args.batch_size, args.lr, Path(args.ckpt_dir), device,
+    )
     print(f"\n[train_baseline] best test accuracy: {best_acc:.4f}")
-    print(f"[train_baseline] checkpoint saved to {ckpt_dir / 'lenet5_best.pt'}")
+    print(f"[train_baseline] checkpoint saved to {ckpt_path}")
 
 
 if __name__ == "__main__":
